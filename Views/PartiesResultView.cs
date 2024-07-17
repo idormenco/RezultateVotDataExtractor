@@ -6,6 +6,7 @@ public class PartiesResultInRomaniaView
     public int BallotId { get; set; }
     public string County { get; set; }
     public string Locality { get; set; }
+    public string Candidate { get; set; }
     public string PartyName { get; set; }
     public string ShortName { get; set; }
     public string Alias { get; set; }

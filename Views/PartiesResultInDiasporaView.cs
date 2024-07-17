@@ -5,6 +5,7 @@ public class PartiesResultInDiasporaView
     public int ElectionId { get; set; }
     public int BallotId { get; set; }
     public string Country { get; set; }
+    public string Candidate { get; set; }
     public string PartyName { get; set; }
     public string ShortName { get; set; }
     public string Alias { get; set; }

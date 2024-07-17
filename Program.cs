@@ -5,10 +5,12 @@ using CsvHelper;
 using Dapper;
 using Figgle;
 using MySql.Data.MySqlClient;
+using RezultateVotDataExtractor;
 using RezultateVotDataExtractor.Views;
 
 Console.WriteLine(FiggleFonts.Ogre.Render("Data extractor"));
-string connectionString = "Server=localhost;Port=3307;Database=accountowner;Uid=dbuser;Pwd=dbuserpassword;";
+
+string connectionString = "Server=localhost;Port=3306;Database=latest;Uid=root;Pwd=root;";
 string listElectionsQuery = @"SELECT e.Name ElectionName,
        CASE
             WHEN e.Category = 0 THEN ""Referendum""
@@ -21,10 +23,12 @@ string listElectionsQuery = @"SELECT e.Name ElectionName,
         END Category, 
        b.name BallotName,
        b.BallotId,
+       b.BallotType,
        e.ElectionId,
        e.Date
 FROM ballots b
 inner join elections e on e.ElectionId = b.ElectionId
+where e.ElectionId = 50
 ORDER BY e.Date DESC";
 
 string voteParticipationPerLocalityQuery = @"
@@ -59,9 +63,10 @@ select e.ElectionId,
         b.BallotId,
         c.Name County,
         l.Name Locality,
-        p.Name PartyName,
-        p.ShortName ShortName,
-        p.Alias Alias,
+        cr.Name Candidate,
+        COALESCE(p.Name, 'CANDIDAT INDEPENDENT') as PartyName,
+        COALESCE(p.ShortName, '') ShortName,
+        COALESCE(p.Alias, '') Alias,
         cr.Votes,
         cr.SeatsGained,
         cr.TotalSeats,
@@ -71,14 +76,41 @@ select e.ElectionId,
 from candidateresults cr
 inner join localities l on l.LocalityId = cr.LocalityId
 inner join counties c on c.CountyId = cr.CountyId
-inner join parties p on p.Id = cr.PartyId
 inner join ballots b on cr.BallotId = b.BallotId
 inner join elections e on b.ElectionId = e.ElectionId
+left join parties p on p.Id = cr.PartyId
+
 where e.ElectionId = @ElectionId
     and b.BallotId = @BallotId
 order by e.date desc,
          c.Name Asc,
          l.Name asc
+";
+
+var partiesResultsPerCountyQuery = @"
+select e.ElectionId,
+        b.BallotId,
+        c.Name County,
+        cr.Name Candidate,
+        COALESCE(p.Name, 'CANDIDAT INDEPENDENT') as PartyName,
+        COALESCE(p.ShortName, '') ShortName,
+        COALESCE(p.Alias, '') Alias,
+        cr.Votes,
+        cr.SeatsGained,
+        cr.TotalSeats,
+        cr.Seats1,
+        cr.Seats2,
+        cr.OverElectoralThreshold
+from candidateresults cr
+inner join counties c on c.CountyId = cr.CountyId
+inner join ballots b on cr.BallotId = b.BallotId
+inner join elections e on b.ElectionId = e.ElectionId
+left join parties p on p.Id = cr.PartyId
+
+where e.ElectionId = @ElectionId
+    and b.BallotId = @BallotId
+order by e.date desc,
+         c.Name Asc
 ";
 
 // Diaspora queries
@@ -110,9 +142,10 @@ var partiesResultsPerCountry = @"
 select e.ElectionId,
         b.BallotId,
         c.Name Country,
-        p.Name PartyName,
-        p.ShortName ShortName,
-        p.Alias Alias,
+        cr.Name Candidate,
+        COALESCE(p.Name, 'CANDIDAT INDEPENDENT') as PartyName,
+        COALESCE(p.ShortName, '') ShortName,
+        COALESCE(p.Alias, '') Alias,
         cr.Votes,
         cr.SeatsGained,
         cr.TotalSeats,
@@ -121,20 +154,18 @@ select e.ElectionId,
         cr.OverElectoralThreshold
 from candidateresults cr
 inner join countries c on c.Id = cr.CountryId
-inner join parties p on p.Id = cr.PartyId
 inner join ballots b on cr.BallotId = b.BallotId
 inner join elections e on b.ElectionId = e.ElectionId
+left join parties p on p.Id = cr.PartyId
 where e.ElectionId = @ElectionId
     and b.BallotId = @BallotId
 order by e.date desc,
          c.Name Asc
 ";
 
-
-
 static void WriteToCSV<T>(IEnumerable<T> records, string fileName)
 {
-    var path = Path.Combine("D:\\data", "csv", fileName);
+    var path = Path.Combine("data", "csv", fileName);
 
     using (var writer = new StreamWriter(path))
     using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
@@ -145,7 +176,7 @@ static void WriteToCSV<T>(IEnumerable<T> records, string fileName)
 
 static void WriteToJson<T>(IEnumerable<T> records, string fileName)
 {
-    var path = Path.Combine("D:\\data", "json", fileName);
+    var path = Path.Combine("data", "json", fileName);
 
     string jsonString = JsonSerializer.Serialize(records, new JsonSerializerOptions() { WriteIndented = true });
 
@@ -169,11 +200,20 @@ try
         WriteToCSV(electionAttendanceInRomania, $"elections-attendance-romania-{election.ElectionId}-{election.BallotId}.csv");
         WriteToJson(electionAttendanceInRomania, $"elections-attendance-romania-{election.ElectionId}-{election.BallotId}.json");
 
-        var partyResultsInRomania = await dbConnection.QueryAsync<PartiesResultInRomaniaView>(partiesResultsPerLocalityQuery, parameters);
+        IEnumerable<PartiesResultInRomaniaView> partiesResults = [];
+        
+        if (election.BallotType is (int)BallotType.LocalCouncil or (int)BallotType.Mayor)
+        {
+            partiesResults = await dbConnection.QueryAsync<PartiesResultInRomaniaView>(partiesResultsPerLocalityQuery, parameters);
+        }
+        else
+        {
+            partiesResults = await dbConnection.QueryAsync<PartiesResultInRomaniaView>(partiesResultsPerCountyQuery, parameters);
+        }
 
-        WriteToCSV(partyResultsInRomania, $"parties-results-romania-{election.ElectionId}-{election.BallotId}.csv");
-        WriteToJson(partyResultsInRomania, $"parties-results-romania-{election.ElectionId}-{election.BallotId}.json");
-
+        WriteToCSV(partiesResults, $"parties-results-romania-{election.ElectionId}-{election.BallotId}.csv");
+        WriteToJson(partiesResults, $"parties-results-romania-{election.ElectionId}-{election.BallotId}.json");
+        
         // diaspora
         var electionAttendanceInDiaspora = await dbConnection.QueryAsync<ElectionAttendanceInDiasporaView>(voteParticipationPerCountry, parameters);
 
@@ -186,7 +226,7 @@ try
         WriteToJson(partyResultsInDiaspora, $"parties-results-diaspora-{election.ElectionId}-{election.BallotId}.json");
     }
 
-    Console.WriteLine("Data has been written to output.csv successfully.");
+    Console.WriteLine("Done!");
 }
 catch (Exception ex)
 {
